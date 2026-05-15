@@ -1,0 +1,33 @@
+# Binaries
+lntab
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and output
+*.test
+*.out
+coverage.out
+
+# Go workspace
+vendor/
+
+# Build artifacts
+dist/
+
+# Config and state files (user-specific)
+lntab.yml
+lntab.yml.state
+*.state
+
+# go.sum (not tracked)
+go.sum
+
+# Editor and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
