@@ -7,7 +7,6 @@ import (
 
 	"lntab/internal/config"
 	"lntab/internal/linker"
-	"lntab/internal/state"
 )
 
 func main() {
@@ -34,42 +33,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	statePath := *configPath + ".state"
-
 	switch command {
 	case "apply":
-		st, err := state.Load(statePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading state: %v\n", err)
-			os.Exit(1)
-		}
 		l := linker.New(*dryRun, *verbose)
-		if err := l.Apply(cfg, groups, st); err != nil {
+		if err := l.Apply(cfg, groups); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
-		}
-		if !*dryRun {
-			if err := st.Save(statePath); err != nil {
-				fmt.Fprintf(os.Stderr, "error saving state: %v\n", err)
-				os.Exit(1)
-			}
 		}
 	case "clean":
-		st, err := state.Load(statePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading state: %v\n", err)
-			os.Exit(1)
-		}
 		l := linker.New(*dryRun, *verbose)
-		if err := l.Clean(st, groups); err != nil {
+		if err := l.Clean(cfg, groups); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
-		}
-		if !*dryRun {
-			if err := st.Save(statePath); err != nil {
-				fmt.Fprintf(os.Stderr, "error saving state: %v\n", err)
-				os.Exit(1)
-			}
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", command)

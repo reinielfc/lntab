@@ -6,12 +6,9 @@ import (
 	"testing"
 
 	"lntab/internal/config"
-	"lntab/internal/state"
 )
 
 // ---- helpers ---------------------------------------------------------------
-
-func newState() *state.State { return &state.State{} }
 
 // makeFile creates a regular file at path with the given content.
 func makeFile(t *testing.T, path, content string) {
@@ -34,26 +31,21 @@ func readLink(t *testing.T, path string) string {
 	return target
 }
 
-func applyConfig(t *testing.T, cfg *config.Config, st *state.State, dryRun, verbose bool) error {
-	t.Helper()
-	return New(dryRun, verbose).Apply(cfg, nil, st)
-}
-
-// singleLinkConfig builds a minimal Config with one group containing one link.
-func singleLinkConfig(src, dst string, flags config.Flags) *config.Config {
+// groupConfig builds a Config with one group.
+func groupConfig(name, source, target string, cleanDirs bool, links ...config.Link) *config.Config {
 	return &config.Config{
 		Groups: []config.Group{
-			{
-				Name:   "g",
-				Source: "",
-				Target: "",
-				Links: []config.Link{
-					{Src: src, Dst: dst, Flags: flags},
-				},
-			},
+			{Name: name, Source: source, Target: target, CleanDirs: cleanDirs, Links: links},
 		},
 	}
 }
+
+func link(src, dst string, flags config.Flags) config.Link {
+	return config.Link{Src: src, Dst: dst, Flags: flags}
+}
+
+var flagsAbs = config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs}
+var flagsRel = config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeRel}
 
 // ---- createLink conflict resolution ----------------------------------------
 
@@ -63,27 +55,12 @@ func TestCreateLink_NewLink(t *testing.T) {
 	dst := filepath.Join(dir, "dst", "file.txt")
 	makeFile(t, src, "hello")
 
-	flags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs}
-	st := newState()
-	if err := New(false, false).createLink(src, dst, flags, "g", st); err != nil {
+	if err := New(false, false).createLink(src, dst, flagsAbs); err != nil {
 		t.Fatal(err)
 	}
-
 	got := readLink(t, dst)
 	if got != src {
 		t.Errorf("link target = %q, want %q", got, src)
-	}
-	var linkEntry *state.Entry
-	for i := range st.Entries {
-		if st.Entries[i].Kind == state.KindLink {
-			linkEntry = &st.Entries[i]
-		}
-	}
-	if linkEntry == nil {
-		t.Fatal("no KindLink entry recorded in state")
-	}
-	if linkEntry.Target != src {
-		t.Errorf("state target = %q, want %q", linkEntry.Target, src)
 	}
 }
 
@@ -95,19 +72,16 @@ func TestCreateLink_AlreadyCorrect(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Pre-create the correct symlink.
 	if err := os.Symlink(src, dst); err != nil {
 		t.Fatal(err)
 	}
 
-	flags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs}
-	st := newState()
-	if err := New(false, false).createLink(src, dst, flags, "g", st); err != nil {
+	// Applying again should be a no-op.
+	if err := New(false, false).createLink(src, dst, flagsAbs); err != nil {
 		t.Fatal(err)
 	}
-	// State should not record a new entry because we did nothing.
-	if len(st.Entries) != 0 {
-		t.Errorf("state entries = %d, want 0", len(st.Entries))
+	if got := readLink(t, dst); got != src {
+		t.Errorf("link target = %q, want %q", got, src)
 	}
 }
 
@@ -116,51 +90,15 @@ func TestCreateLink_ExistsNotSymlink(t *testing.T) {
 	src := filepath.Join(dir, "src", "file.txt")
 	dst := filepath.Join(dir, "dst", "file.txt")
 	makeFile(t, src, "hello")
-	makeFile(t, dst, "i am a real file") // regular file, not a symlink
+	makeFile(t, dst, "i am a real file")
 
-	flags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs}
-	err := New(false, false).createLink(src, dst, flags, "g", newState())
+	err := New(false, false).createLink(src, dst, flagsAbs)
 	if err == nil {
 		t.Fatal("expected error when dst is a regular file, got nil")
 	}
 }
 
-func TestCreateLink_OverwriteOwnedSymlink(t *testing.T) {
-	dir := t.TempDir()
-	src1 := filepath.Join(dir, "src1", "file.txt")
-	src2 := filepath.Join(dir, "src2", "file.txt")
-	dst := filepath.Join(dir, "dst", "file.txt")
-	makeFile(t, src1, "v1")
-	makeFile(t, src2, "v2")
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Simulate a previous run: dst points to src1, recorded in state.
-	if err := os.Symlink(src1, dst); err != nil {
-		t.Fatal(err)
-	}
-	st := newState()
-	st.Add(state.Entry{Kind: state.KindLink, Path: dst, Group: "g", Target: src1})
-
-	// Now apply with src2 as the new target.
-	flags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs}
-	if err := New(false, false).createLink(src2, dst, flags, "g", st); err != nil {
-		t.Fatal(err)
-	}
-	got := readLink(t, dst)
-	if got != src2 {
-		t.Errorf("link target = %q, want %q", got, src2)
-	}
-	// State entry should be updated in place (still one entry).
-	if len(st.Entries) != 1 {
-		t.Errorf("state entries = %d, want 1", len(st.Entries))
-	}
-	if st.Entries[0].Target != src2 {
-		t.Errorf("state target = %q, want %q", st.Entries[0].Target, src2)
-	}
-}
-
-func TestCreateLink_ConflictNotOwnedSymlink(t *testing.T) {
+func TestCreateLink_ConflictSymlink(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src", "file.txt")
 	other := filepath.Join(dir, "other", "file.txt")
@@ -170,15 +108,13 @@ func TestCreateLink_ConflictNotOwnedSymlink(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// dst points to something not in state.
 	if err := os.Symlink(other, dst); err != nil {
 		t.Fatal(err)
 	}
 
-	flags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs}
-	err := New(false, false).createLink(src, dst, flags, "g", newState())
+	err := New(false, false).createLink(src, dst, flagsAbs)
 	if err == nil {
-		t.Fatal("expected error for unowned conflicting symlink, got nil")
+		t.Fatal("expected error for conflicting symlink, got nil")
 	}
 }
 
@@ -193,16 +129,13 @@ func TestApplyMode_Tree(t *testing.T) {
 	makeFile(t, filepath.Join(src, "c.txt"), "c")
 
 	flags := config.Flags{Mode: config.ModeTree, LinkType: config.LinkTypeAbs}
-	st := newState()
-	if err := New(false, false).applyTree(src, dst, flags, "g", st); err != nil {
+	if err := New(false, false).applyTree(src, dst, flags); err != nil {
 		t.Fatal(err)
 	}
 
-	// Files should be symlinked.
 	readLink(t, filepath.Join(dst, "c.txt"))
 	readLink(t, filepath.Join(dst, "a", "b.txt"))
 
-	// Intermediate dir should be a real directory, not a symlink.
 	info, err := os.Lstat(filepath.Join(dst, "a"))
 	if err != nil {
 		t.Fatal(err)
@@ -224,16 +157,13 @@ func TestApplyMode_Entries(t *testing.T) {
 	}
 
 	flags := config.Flags{Mode: config.ModeEntries, LinkType: config.LinkTypeAbs}
-	st := newState()
-	if err := New(false, false).applyEntries(src, dst, flags, "g", st); err != nil {
+	if err := New(false, false).applyEntries(src, dst, flags); err != nil {
 		t.Fatal(err)
 	}
 
-	// Direct children of src should be linked.
 	readLink(t, filepath.Join(dst, "file1.txt"))
 	readLink(t, filepath.Join(dst, "subdir"))
 
-	// The nested file inside subdir should NOT be a separate symlink.
 	_, err := os.Lstat(filepath.Join(dst, "subdir", "nested.txt"))
 	if err != nil {
 		t.Errorf("subdir/nested.txt inaccessible: %v", err)
@@ -248,9 +178,7 @@ func TestLinkType_Relative(t *testing.T) {
 	dst := filepath.Join(dir, "dst", "file.txt")
 	makeFile(t, src, "hello")
 
-	flags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeRel}
-	st := newState()
-	if err := New(false, false).createLink(src, dst, flags, "g", st); err != nil {
+	if err := New(false, false).createLink(src, dst, flagsRel); err != nil {
 		t.Fatal(err)
 	}
 	target := readLink(t, dst)
@@ -265,9 +193,7 @@ func TestLinkType_Absolute(t *testing.T) {
 	dst := filepath.Join(dir, "dst", "file.txt")
 	makeFile(t, src, "hello")
 
-	flags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs}
-	st := newState()
-	if err := New(false, false).createLink(src, dst, flags, "g", st); err != nil {
+	if err := New(false, false).createLink(src, dst, flagsAbs); err != nil {
 		t.Fatal(err)
 	}
 	target := readLink(t, dst)
@@ -284,16 +210,11 @@ func TestDryRun_NoFilesCreated(t *testing.T) {
 	dst := filepath.Join(dir, "dst", "file.txt")
 	makeFile(t, src, "hello")
 
-	flags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs}
-	st := newState()
-	if err := New(true, false).createLink(src, dst, flags, "g", st); err != nil {
+	if err := New(true, false).createLink(src, dst, flagsAbs); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(dst); !os.IsNotExist(err) {
 		t.Error("dry-run should not create any files")
-	}
-	if len(st.Entries) != 0 {
-		t.Error("dry-run should not record state entries")
 	}
 }
 
@@ -308,62 +229,169 @@ func TestClean_RemovesLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st := newState()
-	st.Add(state.Entry{Kind: state.KindLink, Path: dst, Group: "g", Target: src})
-
-	if err := New(false, false).Clean(st, nil); err != nil {
+	cfg := groupConfig("g", dir, dir, false, link("src.txt", "dst.txt", flagsAbs))
+	if err := New(false, false).Clean(cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(dst); !os.IsNotExist(err) {
 		t.Error("Clean should have removed the symlink")
 	}
-	if len(st.Entries) != 0 {
-		t.Errorf("state entries = %d after clean, want 0", len(st.Entries))
-	}
 }
 
-func TestClean_RemovesDirs(t *testing.T) {
+func TestClean_SkipsNonSymlink(t *testing.T) {
 	dir := t.TempDir()
-	created := filepath.Join(dir, "created")
-	if err := os.Mkdir(created, 0o755); err != nil {
+	real := filepath.Join(dir, "real.txt")
+	makeFile(t, real, "i am real")
+
+	cfg := groupConfig("g", dir, dir, false, link("real.txt", "real.txt", flagsAbs))
+	if err := New(false, false).Clean(cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-
-	st := newState()
-	st.Add(state.Entry{Kind: state.KindDir, Path: created, Group: "g"})
-
-	if err := New(false, false).Clean(st, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(created); !os.IsNotExist(err) {
-		t.Error("Clean should have removed the directory")
+	// Regular file must not be removed.
+	if _, err := os.Lstat(real); err != nil {
+		t.Errorf("real file should be preserved: %v", err)
 	}
 }
 
 func TestClean_FiltersByGroup(t *testing.T) {
 	dir := t.TempDir()
-	keep := filepath.Join(dir, "keep.txt")
-	remove := filepath.Join(dir, "remove.txt")
 	src := filepath.Join(dir, "src.txt")
+	keepDst := filepath.Join(dir, "keep.txt")
+	removeDst := filepath.Join(dir, "remove.txt")
 	makeFile(t, src, "x")
-	if err := os.Symlink(src, keep); err != nil {
+	if err := os.Symlink(src, keepDst); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(src, remove); err != nil {
+	if err := os.Symlink(src, removeDst); err != nil {
 		t.Fatal(err)
 	}
 
-	st := newState()
-	st.Add(state.Entry{Kind: state.KindLink, Path: keep, Group: "other", Target: src})
-	st.Add(state.Entry{Kind: state.KindLink, Path: remove, Group: "g", Target: src})
-
-	if err := New(false, false).Clean(st, []string{"g"}); err != nil {
+	cfg := &config.Config{
+		Groups: []config.Group{
+			{Name: "keep", Source: dir, Target: dir, Links: []config.Link{link("src.txt", "keep.txt", flagsAbs)}},
+			{Name: "remove", Source: dir, Target: dir, Links: []config.Link{link("src.txt", "remove.txt", flagsAbs)}},
+		},
+	}
+	if err := New(false, false).Clean(cfg, []string{"remove"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Lstat(remove); !os.IsNotExist(err) {
-		t.Error("group g symlink should have been removed")
+	if _, err := os.Lstat(removeDst); !os.IsNotExist(err) {
+		t.Error("group 'remove' symlink should have been removed")
 	}
-	if _, err := os.Lstat(keep); err != nil {
-		t.Errorf("other group symlink should be kept: %v", err)
+	if _, err := os.Lstat(keepDst); err != nil {
+		t.Errorf("group 'keep' symlink should be preserved: %v", err)
+	}
+}
+
+func TestClean_Tree_RemovesLinks(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	makeFile(t, filepath.Join(src, "a", "b.txt"), "b")
+	makeFile(t, filepath.Join(src, "c.txt"), "c")
+
+	// Apply first to create the symlinks.
+	treeFlags := config.Flags{Mode: config.ModeTree, LinkType: config.LinkTypeAbs}
+	if err := New(false, false).applyTree(src, dst, treeFlags); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := groupConfig("g", dir, dir, false, link("src", "dst", treeFlags))
+	if err := New(false, false).Clean(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Lstat(filepath.Join(dst, "c.txt")); !os.IsNotExist(err) {
+		t.Error("c.txt symlink should be removed")
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "a", "b.txt")); !os.IsNotExist(err) {
+		t.Error("a/b.txt symlink should be removed")
+	}
+}
+
+func TestClean_Entries_RemovesLinks(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	makeFile(t, filepath.Join(src, "file1.txt"), "1")
+	makeFile(t, filepath.Join(src, "file2.txt"), "2")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	entFlags := config.Flags{Mode: config.ModeEntries, LinkType: config.LinkTypeAbs}
+	if err := New(false, false).applyEntries(src, dst, entFlags); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := groupConfig("g", dir, dir, false, link("src", "dst", entFlags))
+	if err := New(false, false).Clean(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Lstat(filepath.Join(dst, "file1.txt")); !os.IsNotExist(err) {
+		t.Error("file1.txt symlink should be removed")
+	}
+}
+
+func TestClean_CleanDirs_RemovesEmptyDirs(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	target := filepath.Join(dir, "target")
+
+	makeFile(t, filepath.Join(src, "sub", "file.txt"), "x")
+
+	treeFlags := config.Flags{Mode: config.ModeTree, LinkType: config.LinkTypeAbs}
+	if err := New(false, false).applyTree(src, target, treeFlags); err != nil {
+		t.Fatal(err)
+	}
+	// target/sub/file.txt is a symlink; target/sub is a real dir.
+	if _, err := os.Lstat(filepath.Join(target, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := groupConfig("g", dir, target, true, link("src", ".", treeFlags))
+	if err := New(false, false).Clean(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink removed.
+	if _, err := os.Lstat(filepath.Join(target, "src", "sub", "file.txt")); !os.IsNotExist(err) {
+		t.Error("symlink should be removed")
+	}
+	// target itself must still exist.
+	if _, err := os.Lstat(target); err != nil {
+		t.Errorf("group target dir should be preserved: %v", err)
+	}
+}
+
+func TestClean_CleanDirs_PreservesNonEmpty(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	target := filepath.Join(dir, "target")
+
+	makeFile(t, filepath.Join(src, "managed.txt"), "managed")
+	// An extra file that lntab does not manage.
+	extra := filepath.Join(target, "extra.txt")
+	makeFile(t, extra, "extra")
+
+	treeFlags := config.Flags{Mode: config.ModeTree, LinkType: config.LinkTypeAbs}
+	if err := New(false, false).applyTree(src, target, treeFlags); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := groupConfig("g", dir, target, true, link("src", ".", treeFlags))
+	if err := New(false, false).Clean(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// The non-empty target dir must survive.
+	if _, err := os.Lstat(target); err != nil {
+		t.Errorf("target dir should be preserved (it still has extra.txt): %v", err)
+	}
+	if _, err := os.Lstat(extra); err != nil {
+		t.Errorf("extra.txt should be untouched: %v", err)
 	}
 }

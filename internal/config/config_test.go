@@ -221,6 +221,46 @@ g:
 	}
 }
 
+func TestLoad_CleanDirsFlag(t *testing.T) {
+	p := writeConfig(t, `
+g:
+  source: /s
+  target: /t
+  flags: [abs, clean_dirs]
+  link:
+    a: b
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := cfg.Groups[0]
+	if !g.CleanDirs {
+		t.Error("CleanDirs = false, want true")
+	}
+	// Other flags should still parse correctly.
+	if g.Links[0].Flags.LinkType != LinkTypeAbs {
+		t.Errorf("link-type = %q, want abs", g.Links[0].Flags.LinkType)
+	}
+}
+
+func TestLoad_CleanDirsDefault(t *testing.T) {
+	p := writeConfig(t, `
+g:
+  source: /s
+  target: /t
+  link:
+    a: b
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups[0].CleanDirs {
+		t.Error("CleanDirs should default to false")
+	}
+}
+
 func TestLoad_MultipleGroups(t *testing.T) {
 	p := writeConfig(t, `
 alpha:

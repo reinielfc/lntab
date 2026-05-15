@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"lntab/internal/config"
-	"lntab/internal/state"
 )
 
 // Linker carries dry-run and verbose options.
@@ -21,54 +22,32 @@ func New(dryRun, verbose bool) *Linker {
 }
 
 // Apply creates symlinks for the given groups (all groups if empty).
-func (l *Linker) Apply(cfg *config.Config, groups []string, st *state.State) error {
+func (l *Linker) Apply(cfg *config.Config, groups []string) error {
 	filter := groupSet(groups)
 	for i := range cfg.Groups {
 		g := &cfg.Groups[i]
 		if len(filter) > 0 && !filter[g.Name] {
 			continue
 		}
-		if err := l.applyGroup(g, st); err != nil {
+		if err := l.applyGroup(g); err != nil {
 			return fmt.Errorf("group %q: %w", g.Name, err)
 		}
 	}
 	return nil
 }
 
-// Clean removes symlinks recorded in state for the given groups.
-func (l *Linker) Clean(st *state.State, groups []string) error {
-	removed := st.Remove(groups)
-	// Remove symlinks first, then dirs (in reverse order so deepest first).
-	var links, dirs []state.Entry
-	for _, e := range removed {
-		switch e.Kind {
-		case state.KindLink:
-			links = append(links, e)
-		case state.KindDir:
-			dirs = append(dirs, e)
+// Clean removes symlinks defined in config for the given groups. When a
+// group has CleanDirs set, empty directories left behind under the group
+// target are also removed (deepest first, never the target root itself).
+func (l *Linker) Clean(cfg *config.Config, groups []string) error {
+	filter := groupSet(groups)
+	for i := range cfg.Groups {
+		g := &cfg.Groups[i]
+		if len(filter) > 0 && !filter[g.Name] {
+			continue
 		}
-	}
-	for _, e := range links {
-		if l.verbose || l.dryRun {
-			fmt.Printf("remove link %s\n", e.Path)
-		}
-		if !l.dryRun {
-			if err := os.Remove(e.Path); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("remove %s: %w", e.Path, err)
-			}
-		}
-	}
-	// Dirs in reverse order (deepest first).
-	for i := len(dirs) - 1; i >= 0; i-- {
-		e := dirs[i]
-		if l.verbose || l.dryRun {
-			fmt.Printf("rmdir %s\n", e.Path)
-		}
-		if !l.dryRun {
-			// Only remove if empty.
-			if err := os.Remove(e.Path); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("rmdir %s: %w", e.Path, err)
-			}
+		if err := l.cleanGroup(g); err != nil {
+			return fmt.Errorf("group %q: %w", g.Name, err)
 		}
 	}
 	return nil
@@ -76,22 +55,22 @@ func (l *Linker) Clean(st *state.State, groups []string) error {
 
 // ---- group-level -----------------------------------------------------------
 
-func (l *Linker) applyGroup(g *config.Group, st *state.State) error {
+func (l *Linker) applyGroup(g *config.Group) error {
 	for _, lnk := range g.Links {
 		src := filepath.Join(g.Source, lnk.Src)
 		dst := filepath.Join(g.Target, lnk.Dst)
 
 		switch lnk.Flags.Mode {
 		case config.ModeLink:
-			if err := l.createLink(src, dst, lnk.Flags, g.Name, st); err != nil {
+			if err := l.createLink(src, dst, lnk.Flags); err != nil {
 				return err
 			}
 		case config.ModeTree:
-			if err := l.applyTree(src, dst, lnk.Flags, g.Name, st); err != nil {
+			if err := l.applyTree(src, dst, lnk.Flags); err != nil {
 				return err
 			}
 		case config.ModeEntries:
-			if err := l.applyEntries(src, dst, lnk.Flags, g.Name, st); err != nil {
+			if err := l.applyEntries(src, dst, lnk.Flags); err != nil {
 				return err
 			}
 		default:
@@ -101,11 +80,51 @@ func (l *Linker) applyGroup(g *config.Group, st *state.State) error {
 	return nil
 }
 
+func (l *Linker) cleanGroup(g *config.Group) error {
+	var removed []string
+
+	for _, lnk := range g.Links {
+		src := filepath.Join(g.Source, lnk.Src)
+		dst := filepath.Join(g.Target, lnk.Dst)
+
+		switch lnk.Flags.Mode {
+		case config.ModeLink:
+			if r, err := l.removeLink(dst); err != nil {
+				return err
+			} else if r {
+				removed = append(removed, dst)
+			}
+		case config.ModeTree:
+			rs, err := l.removeTree(src, dst)
+			if err != nil {
+				return err
+			}
+			removed = append(removed, rs...)
+		case config.ModeEntries:
+			rs, err := l.removeEntries(src, dst)
+			if err != nil {
+				return err
+			}
+			removed = append(removed, rs...)
+		default:
+			return fmt.Errorf("unknown mode %q", lnk.Flags.Mode)
+		}
+	}
+
+	if g.CleanDirs {
+		if err := l.pruneEmptyDirs(g.Target, removed); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // ---- mode implementations --------------------------------------------------
 
 // applyTree mirrors the stow algorithm: for each file under src, create a
 // symlink at the corresponding path under dst. Directories are created.
-func (l *Linker) applyTree(src, dst string, flags config.Flags, group string, st *state.State) error {
+func (l *Linker) applyTree(src, dst string, flags config.Flags) error {
 	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -119,14 +138,14 @@ func (l *Linker) applyTree(src, dst string, flags config.Flags, group string, st
 			if rel == "." {
 				return nil
 			}
-			return l.ensureDir(target, group, st)
+			return l.ensureDir(target)
 		}
-		return l.createLink(path, target, flags, group, st)
+		return l.createLink(path, target, flags)
 	})
 }
 
 // applyEntries links the immediate children of src into dst.
-func (l *Linker) applyEntries(src, dst string, flags config.Flags, group string, st *state.State) error {
+func (l *Linker) applyEntries(src, dst string, flags config.Flags) error {
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return fmt.Errorf("read dir %s: %w", src, err)
@@ -134,8 +153,95 @@ func (l *Linker) applyEntries(src, dst string, flags config.Flags, group string,
 	for _, e := range entries {
 		srcPath := filepath.Join(src, e.Name())
 		dstPath := filepath.Join(dst, e.Name())
-		if err := l.createLink(srcPath, dstPath, flags, group, st); err != nil {
+		if err := l.createLink(srcPath, dstPath, flags); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// removeTree removes symlinks under dst that correspond to files under src.
+func (l *Linker) removeTree(src, dst string) ([]string, error) {
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return nil, nil
+	}
+	var removed []string
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if r, err := l.removeLink(target); err != nil {
+			return err
+		} else if r {
+			removed = append(removed, target)
+		}
+		return nil
+	})
+	return removed, err
+}
+
+// removeEntries removes symlinks inside dst for each immediate child of src.
+func (l *Linker) removeEntries(src, dst string) ([]string, error) {
+	entries, err := os.ReadDir(src)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read dir %s: %w", src, err)
+	}
+	var removed []string
+	for _, e := range entries {
+		if r, err := l.removeLink(filepath.Join(dst, e.Name())); err != nil {
+			return nil, err
+		} else if r {
+			removed = append(removed, filepath.Join(dst, e.Name()))
+		}
+	}
+	return removed, nil
+}
+
+// pruneEmptyDirs removes empty directories that are strict descendants of root
+// and became empty after the symlinks at removed paths were deleted. Dirs are
+// processed deepest-first so a parent is only removed once its children are gone.
+func (l *Linker) pruneEmptyDirs(root string, removed []string) error {
+	seen := make(map[string]bool)
+	var dirs []string
+	for _, p := range removed {
+		dir := filepath.Dir(p)
+		for {
+			rel, err := filepath.Rel(root, dir)
+			if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+				break
+			}
+			if seen[dir] {
+				break
+			}
+			seen[dir] = true
+			dirs = append(dirs, dir)
+			dir = filepath.Dir(dir)
+		}
+	}
+	// Deepest paths first (longest string length).
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			continue
+		}
+		if l.verbose || l.dryRun {
+			fmt.Printf("rmdir %s\n", dir)
+		}
+		if l.dryRun {
+			continue
+		}
+		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("rmdir %s: %w", dir, err)
 		}
 	}
 	return nil
@@ -144,7 +250,7 @@ func (l *Linker) applyEntries(src, dst string, flags config.Flags, group string,
 // ---- low-level helpers -----------------------------------------------------
 
 // createLink creates a symlink at dst pointing to src according to flags.
-func (l *Linker) createLink(src, dst string, flags config.Flags, group string, st *state.State) error {
+func (l *Linker) createLink(src, dst string, flags config.Flags) error {
 	linkTarget, err := resolveLinkTarget(src, dst, flags.LinkType)
 	if err != nil {
 		return err
@@ -157,7 +263,7 @@ func (l *Linker) createLink(src, dst string, flags config.Flags, group string, s
 		return nil
 	}
 
-	if err := l.ensureDir(filepath.Dir(dst), group, st); err != nil {
+	if err := l.ensureDir(filepath.Dir(dst)); err != nil {
 		return err
 	}
 
@@ -175,33 +281,18 @@ func (l *Linker) createLink(src, dst string, flags config.Flags, group string, s
 			return fmt.Errorf("readlink %s: %w", dst, err)
 		}
 		if current == linkTarget {
-			// Already pointing at the right target, nothing to do.
 			return nil
 		}
-		// Allow overwrite only if the current target matches what lntab last wrote.
-		prev := st.Lookup(dst)
-		if prev == nil || prev.Target != current {
-			return fmt.Errorf("%s is a symlink to %q which was not created by lntab (expected %q)", dst, current, linkTarget)
-		}
-		if err := os.Remove(dst); err != nil {
-			return fmt.Errorf("remove %s: %w", dst, err)
-		}
-		if err := os.Symlink(linkTarget, dst); err != nil {
-			return fmt.Errorf("symlink %s -> %s: %w", dst, linkTarget, err)
-		}
-		// Update the existing state entry in place.
-		prev.Target = linkTarget
-		return nil
+		return fmt.Errorf("%s is a symlink to %q, expected %q", dst, current, linkTarget)
 	}
 
 	if err := os.Symlink(linkTarget, dst); err != nil {
 		return fmt.Errorf("symlink %s -> %s: %w", dst, linkTarget, err)
 	}
-	st.Add(state.Entry{Kind: state.KindLink, Path: dst, Group: group, Target: linkTarget})
 	return nil
 }
 
-func (l *Linker) ensureDir(dir string, group string, st *state.State) error {
+func (l *Linker) ensureDir(dir string) error {
 	if l.dryRun {
 		return nil
 	}
@@ -214,8 +305,32 @@ func (l *Linker) ensureDir(dir string, group string, st *state.State) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	st.Add(state.Entry{Kind: state.KindDir, Path: dir, Group: group})
 	return nil
+}
+
+// removeLink removes the symlink at dst if it exists. Returns true if removed.
+// Regular files and directories are left untouched.
+func (l *Linker) removeLink(dst string) (bool, error) {
+	info, err := os.Lstat(dst)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", dst, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, nil
+	}
+	if l.verbose || l.dryRun {
+		fmt.Printf("remove link %s\n", dst)
+	}
+	if l.dryRun {
+		return true, nil
+	}
+	if err := os.Remove(dst); err != nil {
+		return false, fmt.Errorf("remove %s: %w", dst, err)
+	}
+	return true, nil
 }
 
 // resolveLinkTarget returns the string that will be written into the symlink.

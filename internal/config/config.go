@@ -65,10 +65,11 @@ type Link struct {
 
 // Group is a resolved group from the config.
 type Group struct {
-	Name   string
-	Source string
-	Target string
-	Links  []Link
+	Name      string
+	Source    string
+	Target    string
+	CleanDirs bool // remove empty dirs under Target when cleaning
+	Links     []Link
 }
 
 // Config is the parsed and resolved configuration.
@@ -150,15 +151,27 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{}
 	for name, rg := range raw {
-		groupBase, err := ParseFlags(DefaultFlags(), rg.Flags)
+		// Extract "clean_dirs" from flags before parsing mode/link-type flags.
+		var cleanDirs bool
+		var filteredFlags []string
+		for _, f := range rg.Flags {
+			if f == "clean_dirs" {
+				cleanDirs = true
+			} else {
+				filteredFlags = append(filteredFlags, f)
+			}
+		}
+
+		groupBase, err := ParseFlags(DefaultFlags(), filteredFlags)
 		if err != nil {
 			return nil, fmt.Errorf("group %q flags: %w", name, err)
 		}
 
 		g := Group{
-			Name:   name,
-			Source: rg.Source,
-			Target: rg.Target,
+			Name:      name,
+			Source:    rg.Source,
+			Target:    rg.Target,
+			CleanDirs: cleanDirs,
 		}
 
 		for _, le := range rg.Link {
