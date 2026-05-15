@@ -81,7 +81,10 @@ func (l *Linker) applyGroup(g *config.Group) error {
 }
 
 func (l *Linker) cleanGroup(g *config.Group) error {
-	var removed []string
+	// Collect all candidate symlink paths first, then sort deepest-first so
+	// that a nested path is always removed before its parent. This prevents
+	// a parent removal making child paths unreachable via os.Lstat.
+	var candidates []string
 
 	for _, lnk := range g.Links {
 		src := filepath.Join(g.Source, lnk.Src)
@@ -89,25 +92,33 @@ func (l *Linker) cleanGroup(g *config.Group) error {
 
 		switch lnk.Flags.Mode {
 		case config.ModeLink:
-			if r, err := l.removeLink(dst); err != nil {
-				return err
-			} else if r {
-				removed = append(removed, dst)
-			}
+			candidates = append(candidates, dst)
 		case config.ModeTree:
-			rs, err := l.removeTree(src, dst)
+			paths, err := l.collectTree(src, dst)
 			if err != nil {
 				return err
 			}
-			removed = append(removed, rs...)
+			candidates = append(candidates, paths...)
 		case config.ModeEntries:
-			rs, err := l.removeEntries(src, dst)
+			paths, err := l.collectEntries(src, dst)
 			if err != nil {
 				return err
 			}
-			removed = append(removed, rs...)
+			candidates = append(candidates, paths...)
 		default:
 			return fmt.Errorf("unknown mode %q", lnk.Flags.Mode)
+		}
+	}
+
+	// Deepest paths first (longer path → deeper in tree).
+	sort.Slice(candidates, func(i, j int) bool { return len(candidates[i]) > len(candidates[j]) })
+
+	var removed []string
+	for _, dst := range candidates {
+		if r, err := l.removeLink(dst); err != nil {
+			return err
+		} else if r {
+			removed = append(removed, dst)
 		}
 	}
 
@@ -160,12 +171,12 @@ func (l *Linker) applyEntries(src, dst string, flags config.Flags) error {
 	return nil
 }
 
-// removeTree removes symlinks under dst that correspond to files under src.
-func (l *Linker) removeTree(src, dst string) ([]string, error) {
+// collectTree returns dst paths corresponding to files under src, without removing anything.
+func (l *Linker) collectTree(src, dst string) ([]string, error) {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return nil, nil
 	}
-	var removed []string
+	var paths []string
 	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -174,19 +185,14 @@ func (l *Linker) removeTree(src, dst string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
-		if r, err := l.removeLink(target); err != nil {
-			return err
-		} else if r {
-			removed = append(removed, target)
-		}
+		paths = append(paths, filepath.Join(dst, rel))
 		return nil
 	})
-	return removed, err
+	return paths, err
 }
 
-// removeEntries removes symlinks inside dst for each immediate child of src.
-func (l *Linker) removeEntries(src, dst string) ([]string, error) {
+// collectEntries returns dst paths for each immediate child of src, without removing anything.
+func (l *Linker) collectEntries(src, dst string) ([]string, error) {
 	entries, err := os.ReadDir(src)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -194,15 +200,11 @@ func (l *Linker) removeEntries(src, dst string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read dir %s: %w", src, err)
 	}
-	var removed []string
+	paths := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if r, err := l.removeLink(filepath.Join(dst, e.Name())); err != nil {
-			return nil, err
-		} else if r {
-			removed = append(removed, filepath.Join(dst, e.Name()))
-		}
+		paths = append(paths, filepath.Join(dst, e.Name()))
 	}
-	return removed, nil
+	return paths, nil
 }
 
 // pruneEmptyDirs removes empty directories that are strict descendants of root

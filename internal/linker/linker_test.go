@@ -367,6 +367,68 @@ func TestClean_CleanDirs_RemovesEmptyDirs(t *testing.T) {
 	}
 }
 
+func TestClean_DeepestRemovedFirst(t *testing.T) {
+	// The problematic scenario: config has a shallow link (target/a → src/adir)
+	// and a deep link (target/a/b → src/adir/b). If the shallow link is removed
+	// first, target/a/b becomes unreachable and the child symlink is orphaned.
+	// The fix sorts candidates deepest-first so the child is always removed first.
+	dir := t.TempDir()
+	srcAdir := filepath.Join(dir, "src", "adir") // real directory
+	srcFile := filepath.Join(dir, "src", "file") // real file
+	target := filepath.Join(dir, "target")
+
+	makeFile(t, srcFile, "hello")
+	if err := os.MkdirAll(srcAdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Parent link: target/a → src/adir
+	parentDst := filepath.Join(target, "a")
+	if err := os.Symlink(srcAdir, parentDst); err != nil {
+		t.Fatal(err)
+	}
+	// Child symlink created directly inside src/adir so it is reachable via
+	// target/a/b (through the parent symlink).
+	childActual := filepath.Join(srcAdir, "b")
+	if err := os.Symlink(srcFile, childActual); err != nil {
+		t.Fatal(err)
+	}
+	childDst := filepath.Join(target, "a", "b") // accessible via parent symlink
+
+	cfg := &config.Config{
+		Groups: []config.Group{{
+			Name:   "g",
+			Source: filepath.Join(dir, "src"),
+			Target: target,
+			Links: []config.Link{
+				// Parent listed first — naive order would remove it first.
+				{Src: "adir", Dst: "a", Flags: flagsAbs},
+				{Src: "adir/b", Dst: "a/b", Flags: flagsAbs},
+			},
+		}},
+	}
+
+	if err := New(false, false).Clean(cfg, nil); err != nil {
+		t.Fatalf("Clean failed: %v", err)
+	}
+
+	// The child symlink (physically at src/adir/b) must have been removed
+	// while the path was still accessible (i.e., before target/a was removed).
+	if _, err := os.Lstat(childActual); !os.IsNotExist(err) {
+		t.Error("child symlink (src/adir/b) should have been removed; was parent removed first?")
+	}
+	if _, err := os.Lstat(parentDst); !os.IsNotExist(err) {
+		t.Error("parent symlink (target/a) should have been removed")
+	}
+	// Sanity: target/a/b is gone (parent gone, child gone).
+	if _, err := os.Lstat(childDst); !os.IsNotExist(err) {
+		t.Error("target/a/b should be inaccessible after clean")
+	}
+}
+
 func TestClean_CleanDirs_PreservesNonEmpty(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src")
