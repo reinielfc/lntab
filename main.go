@@ -9,6 +9,8 @@ import (
 	"lntab/internal/linker"
 )
 
+var version = "dev"
+
 func main() {
 	configPath := flag.String("config", "lntab.yml", "path to config file")
 	dryRun := flag.Bool("dry-run", false, "print actions without executing")
@@ -20,12 +22,17 @@ func main() {
 	args := flag.Args()
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: lntab [-config <path>] [-n] [-v] <command> [groups...]")
-		fmt.Fprintln(os.Stderr, "commands: apply, clean")
+		fmt.Fprintln(os.Stderr, "commands: apply, clean, version")
 		os.Exit(1)
 	}
 
 	command := args[0]
 	groups := args[1:]
+
+	if command == "version" {
+		fmt.Println(version)
+		return
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {

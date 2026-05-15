@@ -8,12 +8,12 @@ A declarative symlink manager. Define groups of symlinks in a YAML config file a
 go install github.com/reinielfc/lntab@latest
 ```
 
-Or clone and install locally:
+Or clone and build locally:
 
 ```sh
 git clone https://github.com/reinielfc/lntab
 cd lntab
-go install .
+make install
 ```
 
 ## Usage
@@ -34,6 +34,7 @@ lntab [-config <path>] [-n] [-v] <command> [groups...]
 |---------|-------------|
 | `apply` | Create or update symlinks defined in the config |
 | `clean` | Remove symlinks previously created by lntab |
+| `version` | Print the version and exit |
 
 Optionally pass one or more group names to act on a subset:
 
