@@ -25,10 +25,10 @@ release: $(TARGETS:%=dist/$(BIN)-$(VERSION)-%)
 dist/$(BIN)-$(VERSION)-linux-%: | dist
 	GOOS=linux GOARCH=$* go build $(LDFLAGS) -o $@ .
 
-dist/$(BIN)-darwin-%: | dist
+dist/$(BIN)-$(VERSION)-darwin-%: | dist
 	GOOS=darwin GOARCH=$* go build $(LDFLAGS) -o $@ .
 
-dist/$(BIN)-windows-%: | dist
+dist/$(BIN)-$(VERSION)-windows-%: | dist
 	GOOS=windows GOARCH=$* go build $(LDFLAGS) -o $@.exe .
 
 dist:
