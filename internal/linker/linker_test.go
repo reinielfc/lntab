@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"lntab/internal/config"
+	"github.com/reinielfc/lntab/internal/config"
 )
 
 // ---- helpers ---------------------------------------------------------------

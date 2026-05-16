@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"lntab/internal/config"
+	"github.com/reinielfc/lntab/internal/config"
 )
 
 // Linker carries dry-run and verbose options.

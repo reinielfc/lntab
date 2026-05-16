@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"lntab/internal/config"
-	"lntab/internal/linker"
+	"github.com/reinielfc/lntab/internal/config"
+	"github.com/reinielfc/lntab/internal/linker"
 )
 
 var version = "dev"

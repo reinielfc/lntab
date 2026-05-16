@@ -1,4 +1,4 @@
-module lntab
+module github.com/reinielfc/lntab
 
 go 1.26.3
 
