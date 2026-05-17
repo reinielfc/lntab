@@ -261,6 +261,34 @@ g:
 	}
 }
 
+func TestParseFlags_Dotfiles(t *testing.T) {
+	f, err := ParseFlags(DefaultFlags(), []string{"dotfiles"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Dotfiles {
+		t.Error("Dotfiles = false, want true")
+	}
+}
+
+func TestLoad_DotfilesFlag(t *testing.T) {
+	p := writeConfig(t, `
+g:
+  source: /s
+  target: /t
+  flags: [dotfiles]
+  link:
+    a: b
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Groups[0].Links[0].Flags.Dotfiles {
+		t.Error("Dotfiles = false, want true")
+	}
+}
+
 func TestLoad_MultipleGroups(t *testing.T) {
 	p := writeConfig(t, `
 alpha:

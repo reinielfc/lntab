@@ -94,13 +94,13 @@ func (l *Linker) cleanGroup(g *config.Group) error {
 		case config.ModeLink:
 			candidates = append(candidates, dst)
 		case config.ModeTree:
-			paths, err := l.collectTree(src, dst)
+			paths, err := l.collectTreeFlags(src, dst, lnk.Flags)
 			if err != nil {
 				return err
 			}
 			candidates = append(candidates, paths...)
 		case config.ModeEntries:
-			paths, err := l.collectEntries(src, dst)
+			paths, err := l.collectEntriesFlags(src, dst, lnk.Flags)
 			if err != nil {
 				return err
 			}
@@ -144,7 +144,11 @@ func (l *Linker) applyTree(src, dst string, flags config.Flags) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
+		dstRel := rel
+		if flags.Dotfiles {
+			dstRel = dotfilePath(rel)
+		}
+		target := filepath.Join(dst, dstRel)
 		if d.IsDir() {
 			if rel == "." {
 				return nil
@@ -163,7 +167,11 @@ func (l *Linker) applyEntries(src, dst string, flags config.Flags) error {
 	}
 	for _, e := range entries {
 		srcPath := filepath.Join(src, e.Name())
-		dstPath := filepath.Join(dst, e.Name())
+		dstName := e.Name()
+		if flags.Dotfiles {
+			dstName = dotfileName(dstName)
+		}
+		dstPath := filepath.Join(dst, dstName)
 		if err := l.createLink(srcPath, dstPath, flags); err != nil {
 			return err
 		}
@@ -173,6 +181,10 @@ func (l *Linker) applyEntries(src, dst string, flags config.Flags) error {
 
 // collectTree returns dst paths corresponding to files under src, without removing anything.
 func (l *Linker) collectTree(src, dst string) ([]string, error) {
+	return l.collectTreeFlags(src, dst, config.Flags{})
+}
+
+func (l *Linker) collectTreeFlags(src, dst string, flags config.Flags) ([]string, error) {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -185,7 +197,11 @@ func (l *Linker) collectTree(src, dst string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		paths = append(paths, filepath.Join(dst, rel))
+		dstRel := rel
+		if flags.Dotfiles {
+			dstRel = dotfilePath(rel)
+		}
+		paths = append(paths, filepath.Join(dst, dstRel))
 		return nil
 	})
 	return paths, err
@@ -193,6 +209,10 @@ func (l *Linker) collectTree(src, dst string) ([]string, error) {
 
 // collectEntries returns dst paths for each immediate child of src, without removing anything.
 func (l *Linker) collectEntries(src, dst string) ([]string, error) {
+	return l.collectEntriesFlags(src, dst, config.Flags{})
+}
+
+func (l *Linker) collectEntriesFlags(src, dst string, flags config.Flags) ([]string, error) {
 	entries, err := os.ReadDir(src)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -202,7 +222,11 @@ func (l *Linker) collectEntries(src, dst string) ([]string, error) {
 	}
 	paths := make([]string, 0, len(entries))
 	for _, e := range entries {
-		paths = append(paths, filepath.Join(dst, e.Name()))
+		name := e.Name()
+		if flags.Dotfiles {
+			name = dotfileName(name)
+		}
+		paths = append(paths, filepath.Join(dst, name))
 	}
 	return paths, nil
 }
@@ -370,4 +394,21 @@ func groupSet(groups []string) map[string]bool {
 		m[g] = true
 	}
 	return m
+}
+
+// dotfileName replaces a "dot-" prefix with "." for a single path component.
+func dotfileName(name string) string {
+	if strings.HasPrefix(name, "dot-") {
+		return "." + name[4:]
+	}
+	return name
+}
+
+// dotfilePath applies dotfileName to every component of a slash-separated path.
+func dotfilePath(rel string) string {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i, p := range parts {
+		parts[i] = dotfileName(p)
+	}
+	return filepath.Join(parts...)
 }

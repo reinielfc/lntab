@@ -29,6 +29,7 @@ const (
 type Flags struct {
 	Mode     Mode
 	LinkType LinkType
+	Dotfiles bool // rename dot- prefixed names to . in destination paths
 }
 
 // DefaultFlags returns the baseline defaults.
@@ -41,6 +42,10 @@ func DefaultFlags() Flags {
 func ParseFlags(base Flags, raw []string) (Flags, error) {
 	f := base
 	for _, s := range raw {
+		if s == "dotfiles" {
+			f.Dotfiles = true
+			continue
+		}
 		switch Mode(s) {
 		case ModeLink, ModeTree, ModeEntries:
 			f.Mode = Mode(s)

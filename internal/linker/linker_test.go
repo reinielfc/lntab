@@ -429,6 +429,102 @@ func TestClean_DeepestRemovedFirst(t *testing.T) {
 	}
 }
 
+// ---- dotfiles flag ---------------------------------------------------------
+
+func TestDotfiles_Entries(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	makeFile(t, filepath.Join(src, "dot-bashrc"), "bashrc")
+	makeFile(t, filepath.Join(src, "dot-config"), "config")
+	makeFile(t, filepath.Join(src, "readme"), "readme")
+
+	flags := config.Flags{Mode: config.ModeEntries, LinkType: config.LinkTypeAbs, Dotfiles: true}
+	if err := New(false, false).applyEntries(src, dst, flags); err != nil {
+		t.Fatal(err)
+	}
+
+	readLink(t, filepath.Join(dst, ".bashrc"))
+	readLink(t, filepath.Join(dst, ".config"))
+	readLink(t, filepath.Join(dst, "readme")) // no dot- prefix — name unchanged
+}
+
+func TestDotfiles_Tree(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	bashrcSrc := filepath.Join(src, "dot-bashrc")
+	nvimSrc := filepath.Join(src, "dot-config", "dot-nvim", "init.lua")
+	makeFile(t, nvimSrc, "nvim")
+	makeFile(t, bashrcSrc, "bashrc")
+
+	flags := config.Flags{Mode: config.ModeTree, LinkType: config.LinkTypeAbs, Dotfiles: true}
+	if err := New(false, false).applyTree(src, dst, flags); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readLink(t, filepath.Join(dst, ".bashrc")); got != bashrcSrc {
+		t.Errorf(".bashrc link target = %q, want %q", got, bashrcSrc)
+	}
+	if got := readLink(t, filepath.Join(dst, ".config", ".nvim", "init.lua")); got != nvimSrc {
+		t.Errorf(".config/.nvim/init.lua link target = %q, want %q", got, nvimSrc)
+	}
+}
+
+func TestDotfiles_Clean_Entries(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	makeFile(t, filepath.Join(src, "dot-bashrc"), "bashrc")
+
+	flags := config.Flags{Mode: config.ModeEntries, LinkType: config.LinkTypeAbs, Dotfiles: true}
+	if err := New(false, false).applyEntries(src, dst, flags); err != nil {
+		t.Fatal(err)
+	}
+	dstLink := filepath.Join(dst, ".bashrc")
+	readLink(t, dstLink) // verify it was created
+
+	cfg := groupConfig("g", dir, dir, false, link("src", "dst", flags))
+	if err := New(false, false).Clean(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(dstLink); !os.IsNotExist(err) {
+		t.Error(".bashrc symlink should have been removed")
+	}
+}
+
+func TestDotfiles_Clean_Tree(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	makeFile(t, filepath.Join(src, "dot-bashrc"), "bashrc")
+
+	flags := config.Flags{Mode: config.ModeTree, LinkType: config.LinkTypeAbs, Dotfiles: true}
+	if err := New(false, false).applyTree(src, dst, flags); err != nil {
+		t.Fatal(err)
+	}
+	dstLink := filepath.Join(dst, ".bashrc")
+	readLink(t, dstLink)
+
+	cfg := groupConfig("g", dir, dir, false, link("src", "dst", flags))
+	if err := New(false, false).Clean(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(dstLink); !os.IsNotExist(err) {
+		t.Error(".bashrc symlink should have been removed")
+	}
+}
+
 func TestClean_CleanDirs_PreservesNonEmpty(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src")
