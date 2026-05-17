@@ -22,9 +22,6 @@ lntab.yml
 lntab.yml.state
 *.state
 
-# go.sum (not tracked)
-go.sum
-
 # Editor and OS
 .idea/
 .vscode/
