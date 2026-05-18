@@ -118,6 +118,42 @@ func TestCreateLink_ConflictSymlink(t *testing.T) {
 	}
 }
 
+func TestCreateLink_Overwrite_ReplacesConflict(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src", "file.txt")
+	other := filepath.Join(dir, "other", "file.txt")
+	dst := filepath.Join(dir, "dst", "file.txt")
+	makeFile(t, src, "src")
+	makeFile(t, other, "other")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, dst); err != nil {
+		t.Fatal(err)
+	}
+
+	overwriteFlags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs, Overwrite: true}
+	if err := New(false, false).createLink(src, dst, overwriteFlags); err != nil {
+		t.Fatalf("expected no error with overwrite flag, got: %v", err)
+	}
+	if got := readLink(t, dst); got != src {
+		t.Errorf("link target = %q, want %q", got, src)
+	}
+}
+
+func TestCreateLink_Overwrite_StillFailsOnNonSymlink(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src", "file.txt")
+	dst := filepath.Join(dir, "dst", "file.txt")
+	makeFile(t, src, "src")
+	makeFile(t, dst, "real file")
+
+	overwriteFlags := config.Flags{Mode: config.ModeLink, LinkType: config.LinkTypeAbs, Overwrite: true}
+	if err := New(false, false).createLink(src, dst, overwriteFlags); err == nil {
+		t.Fatal("expected error when dst is a regular file, got nil")
+	}
+}
+
 // ---- link modes ------------------------------------------------------------
 
 func TestApplyMode_Tree(t *testing.T) {

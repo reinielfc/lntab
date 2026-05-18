@@ -261,6 +261,34 @@ g:
 	}
 }
 
+func TestParseFlags_Overwrite(t *testing.T) {
+	f, err := ParseFlags(DefaultFlags(), []string{"overwrite"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Overwrite {
+		t.Error("Overwrite = false, want true")
+	}
+}
+
+func TestLoad_OverwriteFlag(t *testing.T) {
+	p := writeConfig(t, `
+g:
+  source: /s
+  target: /t
+  flags: [overwrite]
+  link:
+    a: b
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Groups[0].Links[0].Flags.Overwrite {
+		t.Error("Overwrite = false, want true")
+	}
+}
+
 func TestParseFlags_Dotfiles(t *testing.T) {
 	f, err := ParseFlags(DefaultFlags(), []string{"dotfiles"})
 	if err != nil {

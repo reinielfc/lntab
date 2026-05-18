@@ -309,7 +309,12 @@ func (l *Linker) createLink(src, dst string, flags config.Flags) error {
 		if current == linkTarget {
 			return nil
 		}
-		return fmt.Errorf("%s is a symlink to %q, expected %q", dst, current, linkTarget)
+		if !flags.Overwrite {
+			return fmt.Errorf("%s is a symlink to %q, expected %q", dst, current, linkTarget)
+		}
+		if err := os.Remove(dst); err != nil {
+			return fmt.Errorf("remove %s: %w", dst, err)
+		}
 	}
 
 	if err := os.Symlink(linkTarget, dst); err != nil {

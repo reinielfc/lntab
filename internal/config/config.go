@@ -27,9 +27,10 @@ const (
 
 // Flags holds the resolved flag values for a single link.
 type Flags struct {
-	Mode     Mode
-	LinkType LinkType
-	Dotfiles bool // rename dot- prefixed names to . in destination paths
+	Mode      Mode
+	LinkType  LinkType
+	Dotfiles  bool // rename dot- prefixed names to . in destination paths
+	Overwrite bool // replace existing symlinks regardless of their current target
 }
 
 // DefaultFlags returns the baseline defaults.
@@ -44,6 +45,10 @@ func ParseFlags(base Flags, raw []string) (Flags, error) {
 	for _, s := range raw {
 		if s == "dotfiles" {
 			f.Dotfiles = true
+			continue
+		}
+		if s == "overwrite" {
+			f.Overwrite = true
 			continue
 		}
 		switch Mode(s) {
